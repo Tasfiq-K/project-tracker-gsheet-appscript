@@ -2,10 +2,10 @@ function getFormData() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const form = ss.getSheetByName("Task Form");
 
-  const values = form.getRange("B2:B10").getValues().flat();
+  const values = form.getRange("B2:B11").getValues().flat();
 
   // Check required fields B1 to B7 (index 0 to 6)
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 8; i++) {
     if (!values[i]) {
       SpreadsheetApp.getUi().alert("⚠️ Please complete all required fields (all except Comments).");
       return null;
@@ -15,9 +15,25 @@ function getFormData() {
   return values;
 }
 
-function ccreateTask() {
+function createTask() {
   const data = getFormData();
   if (!data) return;
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const form = ss.getSheetByName("Task Form");
+
+  // ✅ Read Sprint ID from Task Form (B2)
+  const sprintId = form.getRange("B2").getValue().toString().trim();
+  if (!sprintId) {
+    SpreadsheetApp.getUi().alert("⚠️ Please select a Sprint ID.");
+    return;
+  }
+
+  const backend = ss.getSheetByName(sprintId);
+  if (!backend) {
+    SpreadsheetApp.getUi().alert(`❌ Sprint sheet "${sprintId}" not found.`);
+    return;
+  }
 
   const userEmail = Session.getActiveUser().getEmail();
   if (!userEmail) {
@@ -25,9 +41,7 @@ function ccreateTask() {
     return;
   }
 
-  const backend = getCurrentSprintSheet();
-
-  // ✅ Get max Task ID from column A
+  // ✅ Get max Task ID
   let maxTaskId = 0;
   const dataRowCount = backend.getLastRow() - 1;
   if (dataRowCount > 0) {
@@ -44,39 +58,31 @@ function ccreateTask() {
   // ✅ Add new row
   const rowData = [
     newTaskId,        // A → Task ID
-    data[0],          // B → Task Name
-    data[1],          // C → Task Type
+    data[1],          // B → Task Name
+    data[2],          // C → Task Type
     userEmail,        // D → Created By
-    data[2],          // E → Story
-    data[3],          // F → Team
-    data[4],          // G → Assignee
-    data[5],          // H → Status
-    data[6],          // I → Committed to Deliver
-    data[7],          // J - Dependent on
+    data[3],          // E → Story
+    data[4],          // F → Team
+    data[5],          // G → Assignee
+    data[6],          // H → Status
+    data[7],          // I → Committed to Deliver
+    data[8],          // J - Dependent on
     "",               // K - Assignee QA
     "",               // L → Delivered At
     "",               // M → QA Status
     "",               // N → QA Committed to Done
-    data[8] || ""     // O → Comments
+    data[9] || ""     // O → Comments
   ];
-
   backend.appendRow(rowData);
-  clearForm();
+
+  // ✅ Protect columns
   const rowIdx = backend.getLastRow();
-
-
-  // ✅ Protect columns for the creator:
-  // A (Task ID)
-  // B–D (Task Name, Task Type, Created By)
-  // F–J (Story → Committed to Deliver)
-  // N–O (Dependent On, Comments)
   const protectedCols = [
     { startCol: 1, numCols: 1 },  // A → Task ID
     { startCol: 2, numCols: 3 },  // B–D
     { startCol: 6, numCols: 5 },  // F–J
     { startCol: 14, numCols: 2 }  // N–O
   ];
-
   protectedCols.forEach(({ startCol, numCols }) => {
     const range = backend.getRange(rowIdx, startCol, 1, numCols);
     const protection = range.protect().setDescription(`Task fields locked for others`);
@@ -85,16 +91,9 @@ function ccreateTask() {
     if (protection.canDomainEdit()) protection.setDomainEdit(false);
   });
 
-
-  SpreadsheetApp.getUi().alert(`✅ Task #${newTaskId} created and protected!`);
-  // clearForm();
-  
-  // SpreadsheetApp.getActiveSpreadsheet()
-  // .getSheetByName("Flags")
-  // .getRange("A1")
-  // .setValue(new Date());  // Any changing value
+  clearForm();
+  SpreadsheetApp.getUi().alert(`✅ Task #${newTaskId} created in "${sprintId}"!`);
 }
-
 
 function updateTask() {
   const data = getFormData();
@@ -157,30 +156,57 @@ function deleteTask() {
 
 
 function clearForm() {
-  const form = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Task Form");
-  form.getRange("B2:B10").clearContent();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const form = ss.getSheetByName("Task Form");
+  if (!form) return;
+
+  // Clear task input fields (excluding Sprint ID at B2)
+  form.getRange("B3:B11").clearContent();
+
+  // Reuse the dropdown setup function
+  updateSprintDropdown();
 }
+
+// Helper function to format date as dd-mm-yy
+function formatDate(date) {
+  if (!(date instanceof Date)) return date; // in case the cell already has a string
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const yy = String(date.getFullYear()).slice(-2);
+  return `${dd}-${mm}-${yy}`;
+}
+
 
 function getQAFormData() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const form = ss.getSheetByName("QA Form");
-  const values = form.getRange("B2:B5").getValues().flat();
+  const values = form.getRange("B2:B6").getValues().flat();
 
-  // Only Task ID (B2) and QA Status (B5) are required
-  if (!values[0] || !values[3]) {
+  // values = [sprintId, taskId, deliveredAt, qaCommitted, qaStatus]
+  const [sprintId, taskId, deliveredAt, qaCommitted, qaStatus] = values;
+
+  // Only Task ID (B3) and QA Status (B5) are required
+  if (!sprintId || !taskId || !qaStatus) {
     SpreadsheetApp.getUi().alert("⚠️ Please provide Task ID and QA Status.");
     return null;
   }
 
-  return values; // deliveredAt and qaCommitted may be empty
+  return { sprintId, taskId, deliveredAt, qaCommitted, qaStatus };
 }
 
 function submitQA() {
   const data = getQAFormData();
   if (!data) return;
 
-  const [taskId, deliveredAt, qaCommitted, qaStatus] = data;
-  const backend = getCurrentSprintSheet();
+  const { sprintId, taskId, deliveredAt, qaCommitted, qaStatus } = data;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  if (!sprintId || !ss.getSheetByName(sprintId)) {
+    SpreadsheetApp.getUi().alert("❌ Selected Sprint sheet not found!");
+    return;
+  }
+
+  const backend = ss.getSheetByName(sprintId);
   const userEmail = Session.getActiveUser().getEmail();
 
   // 🔍 Find task row
@@ -193,19 +219,18 @@ function submitQA() {
     }
   }
   if (rowIndex === -1) {
-    SpreadsheetApp.getUi().alert("❌ Task ID not found.");
+    SpreadsheetApp.getUi().alert("❌ Task ID not found in selected sprint!");
     return;
   }
 
   // 📝 Write QA values
   backend.getRange(rowIndex, 11).setValue(userEmail);   // K: Assignee QA
   backend.getRange(rowIndex, 12).setValue(deliveredAt); // L: Delivered At
-  backend.getRange(rowIndex, 13).setValue(qaStatus); // M: QA Status
-  backend.getRange(rowIndex, 14).setValue(qaCommitted);    // N: QA commited to done
+  backend.getRange(rowIndex, 13).setValue(qaStatus);    // M: QA Status
+  backend.getRange(rowIndex, 14).setValue(qaCommitted); // N: QA committed to done
 
   // 🔐 Protect QA-related fields (K, L, M, N)
-  const qaCols = [11, 12, 13, 14];
-  qaCols.forEach(col => {
+  [11, 12, 13, 14].forEach(col => {
     const range = backend.getRange(rowIndex, col);
     const protection = range.protect().setDescription(`Protected QA field by ${userEmail}`);
     protection.addEditor(userEmail);
@@ -213,16 +238,22 @@ function submitQA() {
     if (protection.canDomainEdit()) protection.setDomainEdit(false);
   });
 
-  SpreadsheetApp.getUi().alert(`✅ QA info submitted for Task #${taskId}`);
+  SpreadsheetApp.getUi().alert(`✅ QA info submitted for Task #${taskId} in ${sprintId}`);
   clearQAForm();
 }
 
 
 function clearQAForm() {
-  const form = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("QA Form");
-  form.getRange("B2:B5").clearContent();
-}
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const form = ss.getSheetByName("QA Form");
+  if (!form) return;
 
+  // Clear QA input fields (excluding Sprint ID at B2)
+  form.getRange("B3:B5").clearContent();
+
+  // Reuse the dropdown setup function
+  updateQASprintDropdown();
+}
 
 function protectExistingRowsByOwner() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Sprint 44");
@@ -243,7 +274,7 @@ function protectExistingRowsByOwner() {
   }
 }
 
-function createSprint() {
+function ccreateSprint() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const formSheet = ss.getSheetByName("Create Sprint");
 
@@ -346,6 +377,8 @@ function createSprint() {
   clearSprintForm();
 
   SpreadsheetApp.getUi().alert(`✅ Sprint "${sprintId}" created successfully.`);
+  updateSprintDropdown();
+
 }
 
 
@@ -387,7 +420,7 @@ function updateSprintNameInForms(sprintName) {
     taskForm.showColumns(4, 5);  // D to H
     taskForm.showRows(6, 1);     // Row 6
 
-    const taskRange = taskForm.getRange("D6:H6");
+    const taskRange = taskForm.getRange("D7:H7");
     taskRange.clearContent();
     taskRange.merge();
     taskRange.setValue(sprintName)
@@ -404,7 +437,7 @@ function updateSprintNameInForms(sprintName) {
     qaForm.showColumns(4, 5);
     qaForm.showRows(3, 1);
 
-    const qaRange = qaForm.getRange("D3:H3");
+    const qaRange = qaForm.getRange("D4:H4");
     qaRange.clearContent();
     qaRange.merge();
     qaRange.setValue(sprintName)
@@ -456,6 +489,86 @@ function getCurrentSprintSheet() {
   return sheet;
 }
 
+/**
+ * Refresh the Sprint dropdown in Task Form!B11 using Sprint Info sheet.
+ * Works with Sprint Info rows: [SprintNumber, StartDate, EndDate]
+ * or if column A already contains full sheet name it will use that as-is.
+ */
+function updateSprintDropdown() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sprintInfo = ss.getSheetByName("Sprint Info");
+  const form = ss.getSheetByName("Task Form");
 
+  if (!sprintInfo || !form) {
+    throw new Error("❌ Sprint Info or Task Form sheet not found!");
+  }
 
+  // Get sprint data (columns A-C, starting row 2)
+  const lastRow = sprintInfo.getLastRow();
+  let sprintNames = [];
+  if (lastRow >= 2) {
+    const sprintData = sprintInfo.getRange(2, 1, lastRow - 1, 3).getValues();
+    sprintNames = sprintData
+      .filter(row => row[0]) // ensure sprint number exists
+      .map(row => {
+        const sprintNumber = row[0];
+        const startDate = Utilities.formatDate(new Date(row[1]), Session.getScriptTimeZone(), "dd-MM-yy");
+        const endDate = Utilities.formatDate(new Date(row[2]), Session.getScriptTimeZone(), "dd-MM-yy");
+        return `Sprint ${sprintNumber} [${startDate} to ${endDate}]`;
+      });
+  }
 
+  if (sprintNames.length === 0) {
+    throw new Error("❌ No sprint names found in Sprint Info!");
+  }
+
+  // Build dropdown rule
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(sprintNames, true)
+    .setAllowInvalid(false)
+    .build();
+
+  // Apply dropdown to Task Form → B2 (table header row)
+  const cell = form.getRange("B2");
+  cell.setDataValidation(rule);
+
+  // Set default value to first sprint
+  cell.setValue(sprintNames[0]);
+
+}
+
+function updateQASprintDropdown() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sprintInfo = ss.getSheetByName("Sprint Info");
+  const form = ss.getSheetByName("QA Form");
+
+  if (!sprintInfo || !form) throw new Error("❌ Sprint Info or QA Form sheet not found!");
+
+  // Get sprint data (columns A-C, starting row 2)
+  const lastRow = sprintInfo.getLastRow();
+  let sprintNames = [];
+  if (lastRow >= 2) {
+    const sprintData = sprintInfo.getRange(2, 1, lastRow - 1, 3).getValues();
+    sprintNames = sprintData
+      .filter(row => row[0]) // Sprint number exists
+      .map(row => {
+        const sprintNumber = row[0];
+        const startDate = Utilities.formatDate(new Date(row[1]), Session.getScriptTimeZone(), "dd-MM-yy");
+        const endDate = Utilities.formatDate(new Date(row[2]), Session.getScriptTimeZone(), "dd-MM-yy");
+        return `Sprint ${sprintNumber} [${startDate} to ${endDate}]`;
+      });
+  }
+
+  if (sprintNames.length === 0) throw new Error("❌ No sprint names found in Sprint Info!");
+
+  // Apply dropdown to QA Form → B2 (Sprint selection)
+  const cell = form.getRange("B2");
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(sprintNames, true)
+    .setAllowInvalid(false)
+    .build();
+  cell.setDataValidation(rule);
+
+  // Set default value to first sprint
+  cell.setValue(sprintNames[0]);
+}
